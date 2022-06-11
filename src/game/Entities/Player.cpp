@@ -655,6 +655,8 @@ Player::Player(WorldSession* session): Unit(), m_taxiTracker(*this), m_mover(thi
     m_modsSpell = nullptr;
 
     m_isDebuggingAreaTriggers = false;
+
+    m_fishingSteps = 0;
 }
 
 Player::~Player()
@@ -3527,6 +3529,9 @@ bool Player::IsNeedCastPassiveLikeSpellAtLearn(SpellEntry const* spellInfo) cons
 {
     ShapeshiftForm form = GetShapeshiftForm();
 
+    if (spellInfo->HasAttribute(SPELL_ATTR_EX_CAST_WHEN_LEARNED))
+        return true;
+
     if (IsNeedCastSpellAtFormApply(spellInfo, form))        // SPELL_ATTR_PASSIVE | SPELL_ATTR_DO_NOT_DISPLAY spells
         return true;                                        // all stance req. cases, not have auarastate cases
 
@@ -3535,7 +3540,7 @@ bool Player::IsNeedCastPassiveLikeSpellAtLearn(SpellEntry const* spellInfo) cons
 
     // note: form passives activated with shapeshift spells be implemented by HandleShapeshiftBoosts instead of spell_learn_spell
     // talent dependent passives activated at form apply have proper stance data
-    bool need_cast = !spellInfo->Stances || (!form && spellInfo->HasAttribute(SPELL_ATTR_EX2_NOT_NEED_SHAPESHIFT));
+    bool need_cast = !spellInfo->Stances || (!form && spellInfo->HasAttribute(SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED));
 
     // Check CasterAuraStates
     return need_cast && (!spellInfo->CasterAuraState || HasAuraState(AuraState(spellInfo->CasterAuraState)));
@@ -5413,17 +5418,39 @@ bool Player::UpdateGatherSkill(uint32 SkillId, uint32 SkillValue, uint32 RedLeve
     return false;
 }
 
+uint8 GetFishingStepsNeededToLevelUp(uint32 SkillValue)
+{
+    // These formulas are guessed to be as close as possible to how the skill difficulty curve for fishing was on Retail.
+    if (SkillValue < 75)
+        return 1;
+
+    if (SkillValue <= 300)
+        return SkillValue / 44;
+
+    return SkillValue / 31;
+}
+
 bool Player::UpdateFishingSkill()
 {
     DEBUG_LOG("UpdateFishingSkill");
 
     uint32 SkillValue = GetSkillValuePure(SKILL_FISHING);
 
-    int32 chance = SkillValue < 75 ? 100 : 2500 / (SkillValue - 50);
+    if (SkillValue >= GetSkillMax(SKILL_FISHING))
+        return false;
 
-    uint32 gathering_skill_gain = sWorld.getConfig(CONFIG_UINT32_SKILL_GAIN_GATHERING);
+    uint8 stepsNeededToLevelUp = GetFishingStepsNeededToLevelUp(SkillValue);
+    ++m_fishingSteps;
 
-    return UpdateSkillPro(SKILL_FISHING, chance * 10, gathering_skill_gain);
+    // impl of SPELL_ATTR_EX_SPECIAL_SKILLUP
+    if (m_fishingSteps >= stepsNeededToLevelUp)
+    {
+        m_fishingSteps = 0;
+
+        return UpdateSkillPro(SKILL_FISHING, 100*10, 1);
+    }
+
+    return false;
 }
 
 bool Player::UpdateSkillPro(uint16 SkillId, int32 Chance, uint16 diff)
@@ -6412,7 +6439,7 @@ void Player::CheckAreaExploreAndOutdoor()
         }
     }
     else if (sWorld.getConfig(CONFIG_BOOL_VMAP_INDOOR_CHECK) && !IsGameMaster())
-        RemoveAurasWithAttribute(SPELL_ATTR_OUTDOORS_ONLY);
+        RemoveAurasWithAttribute(SPELL_ATTR_ONLY_OUTDOORS);
 
     if (areaFlag == 0xffff)
         return;
@@ -15035,8 +15062,8 @@ bool Player::LoadFromDB(ObjectGuid guid, SqlQueryHolder* holder)
     //"resettalents_time, trans_x, trans_y, trans_z, trans_o, transguid, extra_flags, stable_slots, at_login, zone, online, death_expire_time, taxi_path, dungeon_difficulty,"
     // 39           40                41                42                    43          44          45              46           47              48
     //"arenaPoints, totalHonorPoints, todayHonorPoints, yesterdayHonorPoints, totalKills, todayKills, yesterdayKills, chosenTitle, watchedFaction, drunk,"
-    // 49      50      51      52      53      54      55             56              57      58           59          60
-    //"health, power1, power2, power3, power4, power5, exploredZones, equipmentCache, ammoId, knownTitles, actionBars, grantableLevels  FROM characters WHERE guid = '%u'", GUID_LOPART(m_guid));
+    // 49      50      51      52      53      54      55             56              57      58           59          60               61
+    //"health, power1, power2, power3, power4, power5, exploredZones, equipmentCache, ammoId, knownTitles, actionBars, grantableLevels, fishingSteps  FROM characters WHERE guid = '%u'", GUID_LOPART(m_guid));
     QueryResult* result = holder->GetResult(PLAYER_LOGIN_QUERY_LOADFROM);
 
     Object::_Create(guid.GetCounter(), 0, HIGHGUID_PLAYER);
@@ -15584,6 +15611,8 @@ bool Player::LoadFromDB(ObjectGuid guid, SqlQueryHolder* holder)
     if (m_grantableLevels > 0)
         SetByteValue(PLAYER_FIELD_BYTES, PLAYER_FIELD_BYTES_OFFSET_RAF_GRANTABLE_LEVEL, 0x01);
 
+    m_fishingSteps = fields[61].GetUInt32();
+
     DEBUG_FILTER_LOG(LOG_FILTER_PLAYER_STATS, "The value of player %s after load item and aura is: ", m_name.c_str());
     outDebugStatsValues();
 
@@ -15774,7 +15803,7 @@ void Player::_LoadAuras(QueryResult* result, uint32 timediff)
                 holder->SetState(SPELLAURAHOLDER_STATE_READY);
                 DETAIL_LOG("Added player auras from spellid %u", spellproto->Id);
 
-                if (holder->GetSpellProto()->HasAttribute(SPELL_ATTR_DISABLED_WHILE_ACTIVE))
+                if (holder->GetSpellProto()->HasAttribute(SPELL_ATTR_COOLDOWN_ON_EVENT))
                     AddCooldown(*holder->GetSpellProto(), nullptr, true);
             }
             else
@@ -16760,7 +16789,7 @@ void Player::SaveToDB()
                               "trans_x, trans_y, trans_z, trans_o, transguid, extra_flags, stable_slots, at_login, zone, "
                               "death_expire_time, taxi_path, arenaPoints, totalHonorPoints, todayHonorPoints, yesterdayHonorPoints, totalKills, "
                               "todayKills, yesterdayKills, chosenTitle, watchedFaction, drunk, health, power1, power2, power3, "
-                              "power4, power5, exploredZones, equipmentCache, ammoId, knownTitles, actionBars, grantableLevels) "
+                              "power4, power5, exploredZones, equipmentCache, ammoId, knownTitles, actionBars, grantableLevels, fishingSteps) "
                               "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
                               "?, ?, ?, ?, ?, ?, "
                               "?, ?, ?, "
@@ -16768,7 +16797,7 @@ void Player::SaveToDB()
                               "?, ?, ?, ?, ?, ?, ?, ?, ?, "
                               "?, ?, ?, ?, ?, ?, ?, "
                               "?, ?, ?, ?, ?, ?, ?, ?, ?, "
-                              "?, ?, ?, ?, ?, ?, ?, ?) ");
+                              "?, ?, ?, ?, ?, ?, ?, ?, ?) ");
 
     uberInsert.addUInt32(GetGUIDLow());
     uberInsert.addUInt32(GetSession()->GetAccountId());
@@ -16904,6 +16933,8 @@ void Player::SaveToDB()
     uberInsert.addUInt32(uint32(GetByteValue(PLAYER_FIELD_BYTES, 2)));
 
     uberInsert.addUInt32(uint32(m_grantableLevels));
+
+    uberInsert.addUInt8(m_fishingSteps);
 
     uberInsert.Execute();
 
@@ -20336,14 +20367,14 @@ bool Player::HasItemFitToSpellReqirements(SpellEntry const* spellInfo, Item cons
     if (spellInfo->EquippedItemClass < 0)
         return true;
 
-    if (spellInfo->HasAttribute(SPELL_ATTR_EX3_MAIN_HAND) && !hasMainhandWeaponForAttack())
+    if (spellInfo->HasAttribute(SPELL_ATTR_EX3_REQUIRES_MAIN_HAND_WEAPON) && !hasMainhandWeaponForAttack())
     {
         if (error)
             *error = SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND;
         return false;
     }
 
-    if (spellInfo->HasAttribute(SPELL_ATTR_EX3_REQ_OFFHAND) && !hasOffhandWeaponForAttack())
+    if (spellInfo->HasAttribute(SPELL_ATTR_EX3_REQUIRES_OFFHAND_WEAPON) && !hasOffhandWeaponForAttack())
     {
         if (error)
             *error = SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND;
@@ -20588,7 +20619,7 @@ void Player::SendResurrectRequest(SpellEntry const* spellInfo, bool isSpiritHeal
     data << sentName;
     data << uint8(isSpiritHealer);
     // override delay sent with SMSG_CORPSE_RECLAIM_DELAY, set instant resurrection for spells with this attribute
-    data << uint8(!spellInfo->HasAttribute(SPELL_ATTR_EX3_IGNORE_RESURRECTION_TIMER));
+    data << uint8(!spellInfo->HasAttribute(SPELL_ATTR_EX3_NO_RES_TIMER));
     GetSession()->SendPacket(data);
 }
 
@@ -21876,7 +21907,7 @@ void Player::AddGCD(SpellEntry const& spellEntry, uint32 /*forcedDuration = 0*/,
     // apply haste rating
     if (spellEntry.StartRecoveryCategory == 133 && gcdDuration == 1500 &&
         spellEntry.DmgClass != SPELL_DAMAGE_CLASS_MELEE && spellEntry.DmgClass != SPELL_DAMAGE_CLASS_RANGED &&
-        !spellEntry.HasAttribute(SPELL_ATTR_RANGED) && !spellEntry.HasAttribute(SPELL_ATTR_ABILITY))
+        !spellEntry.HasAttribute(SPELL_ATTR_USES_RANGED_SLOT) && !spellEntry.HasAttribute(SPELL_ATTR_IS_ABILITY))
     {
         gcdDuration = int32(float(gcdDuration) * GetFloatValue(UNIT_MOD_CAST_SPEED));
         gcdDuration = std::max(gcdDuration, 1000);
@@ -21969,7 +22000,7 @@ void Player::AddCooldown(SpellEntry const& spellEntry, ItemPrototype const* item
     {
         // shoot spells used equipped item cooldown values already assigned in GetAttackTime(RANGED_ATTACK)
         // prevent 0 cooldowns set by another way
-        if (spellEntry.HasAttribute(SPELL_ATTR_RANGED) && !spellEntry.HasAttribute(SPELL_ATTR_EX2_NOT_RESET_AUTO_ACTIONS))
+        if (spellEntry.HasAttribute(SPELL_ATTR_USES_RANGED_SLOT) && !spellEntry.HasAttribute(SPELL_ATTR_EX2_DO_NOT_RESET_COMBAT_TIMERS))
             recTime += GetFloatValue(UNIT_FIELD_RANGEDATTACKTIME);
     }
 
@@ -21993,7 +22024,7 @@ void Player::AddCooldown(SpellEntry const& spellEntry, ItemPrototype const* item
         if (haveToSendEvent)
         {
             // client keeps track of category cd by original spellId
-            if (spellCategory && spellEntry.HasAttribute(SPELL_ATTR_DISABLED_WHILE_ACTIVE))
+            if (spellCategory && spellEntry.HasAttribute(SPELL_ATTR_COOLDOWN_ON_EVENT))
             {
                 auto itr = m_cooldownMap.FindByCategory(spellCategory);
                 if (itr != m_cooldownMap.end() && (*itr).second->GetSpellId() != spellEntry.Id)
@@ -22098,7 +22129,7 @@ void Player::LockOutSpells(SpellSchoolMask schoolMask, uint32 duration)
         SpellEntry const* spellEntry = sSpellTemplate.LookupEntry<SpellEntry>(unSpellId);
 
         // Not send cooldown for this spells
-        if (spellEntry->HasAttribute(SPELL_ATTR_DISABLED_WHILE_ACTIVE))
+        if (spellEntry->HasAttribute(SPELL_ATTR_COOLDOWN_ON_EVENT))
             continue;
 
         TimePoint expireTime;
@@ -22134,7 +22165,7 @@ void Player::RemoveSpellLockout(SpellSchoolMask spellSchoolMask, std::set<uint32
         SpellEntry const* spellEntry = sSpellTemplate.LookupEntry<SpellEntry>(unSpellId);
 
         // Not send cooldown for this spells
-        if (!spellEntry || !(GetSpellSchoolMask(spellEntry) & spellSchoolMask) || spellEntry->HasAttribute(SPELL_ATTR_DISABLED_WHILE_ACTIVE))
+        if (!spellEntry || !(GetSpellSchoolMask(spellEntry) & spellSchoolMask) || spellEntry->HasAttribute(SPELL_ATTR_COOLDOWN_ON_EVENT))
             continue;
 
         if (spellAlreadySent)

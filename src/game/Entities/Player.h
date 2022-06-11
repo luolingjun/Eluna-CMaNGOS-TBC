@@ -2662,6 +2662,8 @@ class Player : public Unit
         uint32 m_createdInstanceClearTimer;
 
         std::map<uint32, ObjectGuid> m_followAngles;
+
+        uint8 m_fishingSteps;
 };
 
 void AddItemsSetItem(Player* player, Item* item);

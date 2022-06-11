@@ -440,6 +440,8 @@ Unit::Unit() :
     m_baseSpeedRun = 1.f;
 
     m_comboPoints = 0;
+
+    m_aoeImmune = false;
 }
 
 Unit::~Unit()
@@ -932,8 +934,7 @@ uint32 Unit::DealDamage(Unit* dealer, Unit* victim, uint32 damage, CleanDamage c
     }
 
     if ((cleanDamage && cleanDamage->takenOrAbsorbedDamage) &&
-        (damagetype == DIRECT_DAMAGE || damagetype == SPELL_DIRECT_DAMAGE || damagetype == DOT || damagetype == SELF_DAMAGE || damagetype == SPELL_DAMAGE_SHIELD)
-        && !(spellProto && spellProto->HasAttribute(SPELL_ATTR_EX4_DAMAGE_DOESNT_BREAK_AURAS)))
+        (damagetype == DIRECT_DAMAGE || damagetype == SPELL_DIRECT_DAMAGE || damagetype == DOT || damagetype == SELF_DAMAGE || damagetype == SPELL_DAMAGE_SHIELD))
     {
         int32 actionInterruptFlags = AURA_INTERRUPT_FLAG_DAMAGE;
         if (damagetype != DOT)
@@ -1194,13 +1195,16 @@ void Unit::Kill(Unit* killer, Unit* victim, DamageEffectType damagetype, SpellEn
         // only if not player and not controlled by player pet. And not at BG
         if (durabilityLoss && !responsiblePlayer && !playerVictim->InBattleGround())
         {
-            DEBUG_LOG("DealDamage: Killed %s, looing 10 percents durability", victim->GetGuidStr().c_str());
-            playerVictim->DurabilityLossAll(0.10f, false);
+            if (!spellProto || !spellProto->HasAttribute(SPELL_ATTR_EX3_NO_DURABILITY_LOSS))
+            {
+                DEBUG_LOG("DealDamage: Killed %s, looing 10 percents durability", victim->GetGuidStr().c_str());
+                playerVictim->DurabilityLossAll(0.10f, false);
 
 
-            // durability lost message
-            WorldPacket data(SMSG_DURABILITY_DAMAGE_DEATH, 0);
-            playerVictim->GetSession()->SendPacket(data);
+                // durability lost message
+                WorldPacket data(SMSG_DURABILITY_DAMAGE_DEATH, 0);
+                playerVictim->GetSession()->SendPacket(data);
+            }
         }
 
         if (!spiritOfRedemtionTalentReady)              // Before informing Battleground
@@ -1389,7 +1393,7 @@ void Unit::JustKilledCreature(Unit* killer, Creature* victim, Player* responsibl
 
     // Interrupt channeling spell when a Possessed Summoned is killed
     SpellEntry const* spellInfo = sSpellTemplate.LookupEntry<SpellEntry>(victim->GetUInt32Value(UNIT_CREATED_BY_SPELL));
-    if (spellInfo && spellInfo->HasAttribute(SPELL_ATTR_EX_TOGGLE_FARSIGHT) && spellInfo->HasAttribute(SPELL_ATTR_EX_CHANNELED_1))
+    if (spellInfo && spellInfo->HasAttribute(SPELL_ATTR_EX_TOGGLE_FARSIGHT) && spellInfo->HasAttribute(SPELL_ATTR_EX_IS_CHANNELED))
     {
         Unit* creator = victim->GetMap()->GetUnit(victim->GetCreatorGuid());
         if (creator && creator->GetCharmGuid() == victim->GetObjectGuid())
@@ -2984,7 +2988,7 @@ SpellMissInfo Unit::MeleeSpellHitResult(Unit* pVictim, SpellEntry const* spell, 
                      die.chance[UNIT_COMBAT_DIE_PARRY], die.chance[UNIT_COMBAT_DIE_DEFLECT], die.chance[UNIT_COMBAT_DIE_BLOCK]);
 
     // Memorize heartbeat resist chance if needed:
-    if (heartbeatResistChance && spell->HasAttribute(SPELL_ATTR_HEARTBEAT_RESIST_CHECK))
+    if (heartbeatResistChance && spell->HasAttribute(SPELL_ATTR_HEARTBEAT_RESIST))
         *heartbeatResistChance = (die.chance[UNIT_COMBAT_DIE_RESIST] + die.chance[UNIT_COMBAT_DIE_MISS]);
 
     const uint32 random = urand(1, 10000);
@@ -3016,7 +3020,7 @@ SpellMissInfo Unit::MagicSpellHitResult(Unit* pVictim, SpellEntry const* spell, 
                      die.chance[UNIT_COMBAT_DIE_RESIST], die.chance[UNIT_COMBAT_DIE_DEFLECT]);
 
     // Memorize heartbeat resist chance if needed:
-    if (heartbeatResistChance && spell->HasAttribute(SPELL_ATTR_HEARTBEAT_RESIST_CHECK))
+    if (heartbeatResistChance && spell->HasAttribute(SPELL_ATTR_HEARTBEAT_RESIST))
         *heartbeatResistChance = (die.chance[UNIT_COMBAT_DIE_RESIST] + die.chance[UNIT_COMBAT_DIE_MISS]);
 
     const uint32 random = urand(1, 10000);
@@ -3097,7 +3101,7 @@ SpellMissInfo Unit::SpellHitResult(WorldObject* caster, Unit* pVictim, SpellEntr
     else if (caster->IsGameObject())
         hitCaster = static_cast<GameObject*>(caster)->GetOwner();
 
-    if (hitCaster)
+    if (hitCaster && !spell->HasAttribute(SPELL_ATTR_EX3_NO_AVOIDANCE))
     {
         switch (spell->DmgClass)
         {
@@ -3277,7 +3281,7 @@ bool Unit::CanDazeInCombat(const Unit* victim) const
 
 bool Unit::CanReactOnAbility(const SpellEntry* ability) const
 {
-    return (ability && !ability->HasAttribute(SPELL_ATTR_IMPOSSIBLE_DODGE_PARRY_BLOCK));
+    return (ability && !ability->HasAttribute(SPELL_ATTR_NO_ACTIVE_DEFENSE));
 }
 
 bool Unit::CanDodgeAbility(const Unit* attacker, const SpellEntry* ability) const
@@ -3341,7 +3345,7 @@ bool Unit::CanBlockAbility(const Unit* attacker, const SpellEntry* ability, bool
     // Spells with an attribute must be rolled for block once on spell hit die
     // Spells without an attribute must be rolled for partial block only inside damage calculation
     // This function can query both scenarios via an argument flag
-    if (miss != ability->HasAttribute(SPELL_ATTR_EX3_BLOCKABLE_SPELL))
+    if (miss != ability->HasAttribute(SPELL_ATTR_EX3_COMPLETELY_BLOCKED))
         return false;
     // Check if attacker can be blocked at the moment
     if (!CanBlockInCombat(attacker))
@@ -4504,7 +4508,7 @@ void Unit::SetCurrentCastedSpell(Spell* newSpell)
             // Unless they have this attribute
             if (Spell const* channeledSpell = m_currentSpells[CURRENT_CHANNELED_SPELL])
             {
-                if (!channeledSpell->m_spellInfo->HasAttribute(SPELL_ATTR_EX4_CAN_CAST_WHILE_CASTING) && !newSpell->m_spellInfo->HasAttribute(SPELL_ATTR_EX4_CAN_CAST_WHILE_CASTING))
+                if (!channeledSpell->m_spellInfo->HasAttribute(SPELL_ATTR_EX4_ALLOW_CAST_WHILE_CASTING) && !newSpell->m_spellInfo->HasAttribute(SPELL_ATTR_EX4_ALLOW_CAST_WHILE_CASTING))
                     InterruptSpell(CURRENT_CHANNELED_SPELL, false);
             }
 
@@ -4512,7 +4516,7 @@ void Unit::SetCurrentCastedSpell(Spell* newSpell)
             if (m_currentSpells[CURRENT_AUTOREPEAT_SPELL])
             {
                 // break autorepeat if not Auto Shot
-                if (m_currentSpells[CURRENT_AUTOREPEAT_SPELL]->m_spellInfo->Category == 351) // TODO: figure out what channel interrupt flag corresponds to this
+                if (m_currentSpells[CURRENT_AUTOREPEAT_SPELL]->m_spellInfo->HasAttribute(SPELL_ATTR_EX3_CASTING_CANCELS_AUTOREPEAT))
                     InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
             }
         } break;
@@ -4524,15 +4528,15 @@ void Unit::SetCurrentCastedSpell(Spell* newSpell)
 
             // Channeled spell can only be one
             // Spells with this attribute can be cast in parallel with generic spells
-            if (!newSpell->m_spellInfo->HasAttribute(SPELL_ATTR_EX4_CAN_CAST_WHILE_CASTING) && !newSpell->m_IsTriggeredSpell)
+            if (!newSpell->m_spellInfo->HasAttribute(SPELL_ATTR_EX4_ALLOW_CAST_WHILE_CASTING) && !newSpell->m_IsTriggeredSpell)
             {
                 if (Spell const* genericSpell = m_currentSpells[CURRENT_AUTOREPEAT_SPELL])
-                    if (!genericSpell->m_spellInfo->HasAttribute(SPELL_ATTR_EX4_CAN_CAST_WHILE_CASTING))
+                    if (!genericSpell->m_spellInfo->HasAttribute(SPELL_ATTR_EX4_ALLOW_CAST_WHILE_CASTING))
                         InterruptSpell(CURRENT_GENERIC_SPELL, false);
 
                 // it also does break autorepeat if not Auto Shot
                 if (m_currentSpells[CURRENT_AUTOREPEAT_SPELL] &&
-                    m_currentSpells[CURRENT_AUTOREPEAT_SPELL]->m_spellInfo->Category == 351)
+                    m_currentSpells[CURRENT_AUTOREPEAT_SPELL]->m_spellInfo->HasAttribute(SPELL_ATTR_EX3_CASTING_CANCELS_AUTOREPEAT))
                     InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
             }
         } break;
@@ -4540,13 +4544,13 @@ void Unit::SetCurrentCastedSpell(Spell* newSpell)
         case CURRENT_AUTOREPEAT_SPELL:
         {
             // only Auto Shoot does not break anything
-            if (newSpell->m_spellInfo->Category == 351)
+            if (newSpell->m_spellInfo->HasAttribute(SPELL_ATTR_EX3_CASTING_CANCELS_AUTOREPEAT))
             {
                 // generic autorepeats break generic non-delayed and channeled non-delayed spells
                 InterruptSpell(CURRENT_GENERIC_SPELL, false);
                 if (m_currentSpells[CURRENT_CHANNELED_SPELL])
                 {
-                    if (!newSpell->m_spellInfo->HasAttribute(SPELL_ATTR_EX4_CAN_CAST_WHILE_CASTING))
+                    if (!newSpell->m_spellInfo->HasAttribute(SPELL_ATTR_EX4_ALLOW_CAST_WHILE_CASTING))
                         InterruptSpell(CURRENT_CHANNELED_SPELL, false);
                 }
             }
@@ -4623,7 +4627,7 @@ bool Unit::IsNonMeleeSpellCasted(bool withDelayed, bool skipChanneled, bool skip
             bool specialResult = true;
             if (forMovement) // mobs can move during spells without this flag
                 specialResult = genericSpell->m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT;
-            bool isAutoNonInterrupting = forAutoIgnore && genericSpell->m_spellInfo->HasAttribute(SPELL_ATTR_EX2_NOT_RESET_AUTO_ACTIONS);
+            bool isAutoNonInterrupting = forAutoIgnore && genericSpell->m_spellInfo->HasAttribute(SPELL_ATTR_EX2_DO_NOT_RESET_COMBAT_TIMERS);
             if (!isAutoNonInterrupting && specialResult && (withDelayed || genericSpell->getState() != SPELL_STATE_TRAVELING))
                 return true;
         }
@@ -4638,9 +4642,9 @@ bool Unit::IsNonMeleeSpellCasted(bool withDelayed, bool skipChanneled, bool skip
             if (forMovement)
                 attributeResult = channeledSpell->m_spellInfo->HasAttribute(SPELL_ATTR_EX5_CAN_CHANNEL_WHEN_MOVING);
             else
-                attributeResult = channeledSpell->m_spellInfo->HasAttribute(SPELL_ATTR_EX4_CAN_CAST_WHILE_CASTING);
+                attributeResult = channeledSpell->m_spellInfo->HasAttribute(SPELL_ATTR_EX4_ALLOW_CAST_WHILE_CASTING);
 
-            bool isAutoNonInterrupting = forAutoIgnore && channeledSpell->m_spellInfo->HasAttribute(SPELL_ATTR_EX2_NOT_RESET_AUTO_ACTIONS);
+            bool isAutoNonInterrupting = forAutoIgnore && channeledSpell->m_spellInfo->HasAttribute(SPELL_ATTR_EX2_DO_NOT_RESET_COMBAT_TIMERS);
             if (!isAutoNonInterrupting && !attributeResult && !channeledSpell->m_IsTriggeredSpell && (channeledSpell->getState() != SPELL_STATE_FINISHED))
                 return true;
         }
@@ -4935,7 +4939,7 @@ bool Unit::AddSpellAuraHolder(SpellAuraHolder* holder)
 
     // ghost spell check, allow apply any auras at player loading in ghost mode (will be cleanup after load)
     if (!IsAlive() && !IsDeathPersistentSpell(aurSpellInfo) &&
-        !IsDeathOnlySpell(aurSpellInfo) && !aurSpellInfo->HasAttribute(SPELL_ATTR_EX2_CAN_TARGET_DEAD) &&
+        !IsDeathOnlySpell(aurSpellInfo) && !aurSpellInfo->HasAttribute(SPELL_ATTR_EX2_ALLOW_DEAD_TARGET) &&
         (GetTypeId() != TYPEID_PLAYER || !((Player*)this)->GetSession()->PlayerLoading()))
     {
         return false;
@@ -5008,7 +5012,7 @@ bool Unit::AddSpellAuraHolder(SpellAuraHolder* holder)
             else
             {
                 //any stackable case with amount should mod existing stack amount
-                if (aurSpellInfo->StackAmount && !IsChanneledSpell(aurSpellInfo) && !aurSpellInfo->HasAttribute(SPELL_ATTR_EX3_STACK_FOR_DIFF_CASTERS))
+                if (aurSpellInfo->StackAmount && !IsChanneledSpell(aurSpellInfo) && !aurSpellInfo->HasAttribute(SPELL_ATTR_EX3_DOT_STACKING_RULE))
                 {
                     foundHolder->ModStackAmount(holder->GetStackAmount(), holder->GetCaster());
                     return false;
@@ -5206,7 +5210,7 @@ bool Unit::RemoveNoStackAurasDueToAuraHolder(SpellAuraHolder* holder)
 
         // early checks that spellId is passive non stackable spell
         // Experimental: passive abilities dont stack with itself
-        if (IsPassiveSpell(existingSpellProto) && (spellId != existingSpellId || !spellProto->HasAttribute(SPELL_ATTR_ABILITY)))
+        if (IsPassiveSpell(existingSpellProto) && (spellId != existingSpellId || !spellProto->HasAttribute(SPELL_ATTR_IS_ABILITY)))
         {
             // passive non-stackable spells not stackable only for same caster
             // Experimental: exclude party passive auras from this
@@ -5554,22 +5558,27 @@ void Unit::RemoveAurasOnCast(uint32 flag, SpellEntry const* castedSpellEntry)
 
         if (spellEntry->AuraInterruptFlags & flag && (spellEntry->Id != castedSpellEntry->Id || GetObjectGuid() != holder->GetCasterGuid()))
         {
-            if (castedSpellEntry->HasAttribute(SPELL_ATTR_EX_NOT_BREAK_STEALTH))
+            auto auraCheck = [&](AuraType type) -> bool
             {
-                bool foundStealth = false;
+                bool foundType = false;
                 for (auto aura : holder->m_auras)
                 {
                     if (aura)
                     {
-                        if (aura->GetModifier()->m_auraname == SPELL_AURA_MOD_STEALTH)
+                        if (aura->GetModifier()->m_auraname == type)
                         {
-                            foundStealth = true;
+                            foundType = true;
                             break;
                         }
                     }
                 }
-                removeThisHolder = !foundStealth;
-            }
+                return foundType;
+            };
+
+            if (castedSpellEntry->HasAttribute(SPELL_ATTR_EX_ALLOW_WHILE_STEALTHED) && !auraCheck(SPELL_AURA_MOD_STEALTH))
+                removeThisHolder = true;
+            else if (castedSpellEntry->HasAttribute(SPELL_ATTR_EX2_ALLOW_WHILE_INVISIBLE) && !auraCheck(SPELL_AURA_MOD_INVISIBILITY))
+                removeThisHolder = true;
             else
                 removeThisHolder = true;
         }
@@ -5772,7 +5781,7 @@ void Unit::RemoveArenaAuras(bool onleave)
                 // don't remove stances, shadowform, pally/hunter auras
                 !iter->second->IsPassive() &&               // don't remove passive auras
                 (!iter->second->GetSpellProto()->HasAttribute(SPELL_ATTR_NO_IMMUNITIES) ||
-                 !iter->second->GetSpellProto()->HasAttribute(SPELL_ATTR_HIDE_IN_COMBAT_LOG)) &&
+                 !iter->second->GetSpellProto()->HasAttribute(SPELL_ATTR_DO_NOT_LOG)) &&
                 !HasAreaAuraEffect(iter->second->GetSpellProto()) &&
                 // not unaffected by invulnerability auras or not having that unknown flag (that seemed the most probable)
                 (iter->second->IsPositive() != onleave))   // remove positive buffs on enter, negative buffs on leave
@@ -6046,7 +6055,7 @@ void Unit::AddGameObject(GameObject* gameObj)
     {
         SpellEntry const* createBySpell = sSpellTemplate.LookupEntry<SpellEntry>(gameObj->GetSpellId());
         // Need disable spell use for owner
-        if (createBySpell && createBySpell->HasAttribute(SPELL_ATTR_DISABLED_WHILE_ACTIVE))
+        if (createBySpell && createBySpell->HasAttribute(SPELL_ATTR_COOLDOWN_ON_EVENT))
             // note: item based cooldowns and cooldown spell mods with charges ignored (unknown existing cases)
             AddCooldown(*createBySpell);
     }
@@ -6085,7 +6094,7 @@ void Unit::RemoveGameObject(GameObject* gameObj, bool del)
         {
             SpellEntry const* createBySpell = sSpellTemplate.LookupEntry<SpellEntry>(spellid);
             // Need activate spell use for owner
-            if (createBySpell && createBySpell->HasAttribute(SPELL_ATTR_DISABLED_WHILE_ACTIVE))
+            if (createBySpell && createBySpell->HasAttribute(SPELL_ATTR_COOLDOWN_ON_EVENT))
                 // note: item based cooldowns and cooldown spell mods with charges ignored (unknown existing cases)
                 AddCooldown(*createBySpell);
         }
@@ -6295,7 +6304,7 @@ void Unit::CasterHitTargetWithSpell(Unit* realCaster, Unit* target, SpellEntry c
 
     if (realCaster->CanAttack(target))
     {
-        if (spellInfo->HasAttribute(SPELL_ATTR_EX2_NO_INITIAL_THREAT) && !spellInfo->HasAttribute(SPELL_ATTR_EX3_OUT_OF_COMBAT_ATTACK))
+        if (spellInfo->HasAttribute(SPELL_ATTR_EX2_NO_INITIAL_THREAT) && !spellInfo->HasAttribute(SPELL_ATTR_EX3_PVP_ENABLING))
             return;
 
         // we want to change the stand state of each character if possible/required
@@ -6309,12 +6318,12 @@ void Unit::CasterHitTargetWithSpell(Unit* realCaster, Unit* target, SpellEntry c
         // Mind soothe confirmed to aggro on resist
         if (attack && (!success || !spellInfo->HasAttribute(SPELL_ATTR_EX_THREAT_ONLY_ON_MISS)) && !spellInfo->HasAttribute(SPELL_ATTR_EX_NO_THREAT))
         {
-            if (success)
+            if (success && !spellInfo->HasAttribute(SPELL_ATTR_EX2_NOT_AN_ACTION))
             {
                 target->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_HOSTILE_ACTION);
 
                 // caster can be detected but have stealth aura
-                if (!spellInfo->HasAttribute(SPELL_ATTR_EX_NOT_BREAK_STEALTH))
+                if (!spellInfo->HasAttribute(SPELL_ATTR_EX_ALLOW_WHILE_STEALTHED))
                     realCaster->RemoveSpellsCausingAura(SPELL_AURA_MOD_STEALTH);
             }
 
@@ -6327,7 +6336,7 @@ void Unit::CasterHitTargetWithSpell(Unit* realCaster, Unit* target, SpellEntry c
             realCaster->GetCombatManager().TriggerCombatTimer(target);
         }
 
-        if (attack && spellInfo->HasAttribute(SPELL_ATTR_EX3_OUT_OF_COMBAT_ATTACK))
+        if (attack && spellInfo->HasAttribute(SPELL_ATTR_EX3_PVP_ENABLING))
         {
             target->SetOutOfCombatWithAggressor(realCaster);
             realCaster->SetOutOfCombatWithVictim(target);
@@ -6342,7 +6351,7 @@ void Unit::CasterHitTargetWithSpell(Unit* realCaster, Unit* target, SpellEntry c
             target->getHostileRefManager().threatAssist(realCaster, 0.0f, spellInfo, false, triggered);
         }
 
-        if (spellInfo->HasAttribute(SPELL_ATTR_EX3_OUT_OF_COMBAT_ATTACK))
+        if (spellInfo->HasAttribute(SPELL_ATTR_EX3_PVP_ENABLING))
             realCaster->SetOutOfCombatWithAssisted(target);
     }
 }
@@ -7475,7 +7484,7 @@ Unit* Unit::SelectMagnetTarget(Unit* victim, Spell* spell)
     // Magic case
     if (spell && (spell->m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_NONE || spell->m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_MAGIC))
     {
-        if (spell->m_spellInfo->HasAttribute(SPELL_ATTR_ABILITY) || spell->m_spellInfo->HasAttribute(SPELL_ATTR_EX_CANT_BE_REDIRECTED) || spell->m_spellInfo->HasAttribute(SPELL_ATTR_NO_IMMUNITIES))
+        if (spell->m_spellInfo->HasAttribute(SPELL_ATTR_IS_ABILITY) || spell->m_spellInfo->HasAttribute(SPELL_ATTR_EX_NO_REDIRECTION) || spell->m_spellInfo->HasAttribute(SPELL_ATTR_NO_IMMUNITIES))
             return nullptr;
 
         Unit::AuraList const& magnetAuras = victim->GetAurasByType(SPELL_AURA_SPELL_MAGNET);
@@ -7494,7 +7503,7 @@ Unit* Unit::SelectMagnetTarget(Unit* victim, Spell* spell)
     // Melee && ranged case
     else
     {
-        if (spell && spell->m_spellInfo->HasAttribute(SPELL_ATTR_EX_CANT_BE_REDIRECTED))
+        if (spell && spell->m_spellInfo->HasAttribute(SPELL_ATTR_EX_NO_REDIRECTION))
             return nullptr;
 
         AuraList const& hitTriggerAuras = victim->GetAurasByType(SPELL_AURA_ADD_CASTER_HIT_TRIGGER);
@@ -8520,7 +8529,7 @@ void Unit::ApplySpellDispelImmunity(const Aura* aura, DispelType type, bool appl
 {
     ApplySpellImmune(aura, IMMUNITY_DISPEL, type, apply);
 
-    if (apply && aura->GetSpellProto()->HasAttribute(SPELL_ATTR_EX_DISPEL_AURAS_ON_IMMUNITY))
+    if (apply && aura->GetSpellProto()->HasAttribute(SPELL_ATTR_EX_IMMUNITY_PURGES_EFFECT))
         RemoveAurasWithDispelType(type);
 }
 
@@ -9501,6 +9510,9 @@ float Unit::ApplyTotalThreatModifier(float threat, SpellSchoolMask schoolMask)
 
 void Unit::AddThreat(Unit* pVictim, float threat /*= 0.0f*/, bool crit /*= false*/, SpellSchoolMask schoolMask /*= SPELL_SCHOOL_MASK_NONE*/, SpellEntry const* threatSpell /*= nullptr*/ /*= nullptr*/)
 {
+    if (threatSpell && threatSpell->HasAttribute(SPELL_ATTR_EX4_NO_HARMFUL_THREAT))
+        return;
+
     // Only mobs can manage threat lists
     if (CanHaveThreatList())
         getThreatManager().addThreat(pVictim, threat, crit, schoolMask, threatSpell, false);
@@ -13093,7 +13105,7 @@ bool Unit::MeetsSelectAttackingRequirement(Unit* target, SpellEntry const* spell
             if (target->IsImmuneToSpell(spellInfo, false, GetCheckCastEffectMask(spellInfo)))
                 return false;
 
-        if (spellInfo->HasAttribute(SPELL_ATTR_EX3_TARGET_ONLY_PLAYER) && target->GetTypeId() != TYPEID_PLAYER)
+        if (spellInfo->HasAttribute(SPELL_ATTR_EX3_ONLY_ON_PLAYER) && target->GetTypeId() != TYPEID_PLAYER)
             return false;
 
         switch (spellInfo->rangeIndex)
