@@ -913,17 +913,14 @@ class WorldObject : public Object
         friend struct WorldObjectChangeAccumulator;
 
     public:
-#ifdef BUILD_ELUNA
-        virtual ~WorldObject();
-		virtual void Update(uint32 update_diff);
-#else
-		virtual ~WorldObject() {}
         virtual void Update(const uint32 /*diff*/);
-#endif
-
         virtual void Heartbeat() {}
         virtual uint32 GetHeartbeatDuration() const { return 5000; }
-
+#ifdef BUILD_ELUNA
+        virtual ~WorldObject();
+#else
+        virtual ~WorldObject() {}       
+#endif
         void _Create(uint32 guidlow, HighGuid guidhigh, uint32 phaseMask = 1);
 
         TransportInfo* GetTransportInfo() const { return m_transportInfo; }

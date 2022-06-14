@@ -672,13 +672,13 @@ void WorldSession::HandleEmoteOpcode(WorldPacket& recv_data)
     uint32 emote;
     recv_data >> emote;
 
+    if (!GetPlayer()->IsAlive() || GetPlayer()->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PREVENT_ANIM))
+        return;
+
 #ifdef BUILD_ELUNA
     // used by eluna
     sEluna->OnEmote(GetPlayer(), emote);
 #endif
-
-    if (!GetPlayer()->IsAlive() || GetPlayer()->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PREVENT_ANIM))
-        return;
 
     // restrict to the only emotes hardcoded in client
     if (emote != EMOTE_ONESHOT_NONE && emote != EMOTE_ONESHOT_WAVE)
@@ -728,11 +728,6 @@ void WorldSession::HandleTextEmoteOpcode(WorldPacket& recv_data)
     recv_data >> textEmote;
     recv_data >> emoteNum;
     recv_data >> guid;
-	
-#ifdef BUILD_ELUNA
-    // used by eluna
-    sEluna->OnTextEmote(GetPlayer(), textEmote, emoteNum, guid);
-#endif
 
     if (!GetPlayer()->IsAlive() || GetPlayer()->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PREVENT_ANIM))
         return;
@@ -743,6 +738,11 @@ void WorldSession::HandleTextEmoteOpcode(WorldPacket& recv_data)
         SendNotification(GetMangosString(LANG_WAIT_BEFORE_SPEAKING), timeStr.c_str());
         return;
     }
+
+#ifdef BUILD_ELUNA
+    // used by eluna
+    sEluna->OnTextEmote(GetPlayer(), textEmote, emoteNum, guid);
+#endif
 
     EmotesTextEntry const* em = sEmotesTextStore.LookupEntry(textEmote);
     if (!em)

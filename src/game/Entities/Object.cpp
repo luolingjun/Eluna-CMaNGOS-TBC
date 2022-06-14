@@ -1236,6 +1236,9 @@ void WorldObject::Update(uint32 update_diff)
 #else
 void WorldObject::Update(const uint32 diff)
 {
+#ifdef BUILD_ELUNA
+    elunaEvents->Update(diff);
+#endif
     m_heartBeatTimer.Update(diff);
     while (m_heartBeatTimer.Passed())
     {

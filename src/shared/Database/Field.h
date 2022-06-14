@@ -67,6 +67,9 @@ class Field
 
             return value;
         }
+
+        time_t GetTime() const;
+
         uint64 GetInt64() const
         {
             int64 value = 0;
@@ -75,8 +78,6 @@ class Field
 
             return value;
         }
-
-        time_t GetTime() const;
 
         void SetType(enum DataTypes type) { mType = type; }
         // no need for memory allocations to store resultset field strings

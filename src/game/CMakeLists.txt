@@ -95,6 +95,7 @@ target_link_libraries(${LIBRARY_NAME}
   PRIVATE detour
   PRIVATE lualib
   PRIVATE zlib
+  PRIVATE lualib
 )
 
 # include additionals headers
