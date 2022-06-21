@@ -6822,9 +6822,9 @@ bool Unit::Attack(Unit* victim, bool meleeAttack)
             return false;
     }
 
-    // remove SPELL_AURA_MOD_UNTARGETABLE at attack (in case non-interruptible spells stun aura applied also that not let attack)
-    if (HasAuraType(SPELL_AURA_MOD_UNTARGETABLE))
-        RemoveSpellsCausingAura(SPELL_AURA_MOD_UNTARGETABLE);
+    // remove SPELL_AURA_MOD_UNATTACKABLE at attack (in case non-interruptible spells stun aura applied also that not let attack)
+    if (HasAuraType(SPELL_AURA_MOD_UNATTACKABLE))
+        RemoveSpellsCausingAura(SPELL_AURA_MOD_UNATTACKABLE);
 
     // in fighting already
     if (m_attacking)
@@ -8886,7 +8886,7 @@ bool Unit::IsTargetableForAttack(bool inverseAlive /*=false*/) const
         return false;
     }
 
-    if (HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_SPAWNING | UNIT_FLAG_NOT_SELECTABLE))
+    if (HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_SPAWNING | UNIT_FLAG_UNINTERACTIBLE))
     {
         return false;
     }
