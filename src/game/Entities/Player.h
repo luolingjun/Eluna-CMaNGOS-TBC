@@ -1535,7 +1535,6 @@ class Player : public Unit
         void PetSpellInitialize() const;
         void CharmSpellInitialize() const;
         void PossessSpellInitialize();
-        void CharmCooldownInitialize(WorldPacket& data) const;
         void RemovePetActionBar() const;
         std::pair<float, float> RequestFollowData(ObjectGuid guid);
         void RelinquishFollowData(ObjectGuid guid);
