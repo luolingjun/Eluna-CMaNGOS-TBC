@@ -3274,8 +3274,11 @@ SpellCastResult Spell::cast(bool skipCheck)
 
 #ifdef BUILD_ELUNA
     // used by eluna
-    if (m_caster->GetTypeId() == TYPEID_PLAYER)
-        sEluna->OnSpellCast(m_caster->ToPlayer(), this, skipCheck);
+    if (m_caster)
+    {
+        if (m_caster->GetTypeId() == TYPEID_PLAYER)
+            sEluna->OnSpellCast(m_caster->ToPlayer(), this, skipCheck);
+    }
 #endif
 
     m_duration = CalculateSpellDuration(m_spellInfo, m_caster);
