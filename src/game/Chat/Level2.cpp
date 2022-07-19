@@ -660,7 +660,15 @@ bool ChatHandler::HandleGoCreatureCommand(char* args)
         {
             Creature* creature = nullptr;
             if (dbGuid)
+            {
+                // check static creature store
                 creature = map->GetCreature(ObjectGuid(HIGHGUID_UNIT, dbGuid));
+                if (!creature)
+                {
+                    // check creature with dynamic guid
+                    creature = map->GetCreature(dbGuid);
+                }
+            }
             /*else
                 creature = map->GetCreatureByEntry(data->id);*/
 
@@ -3340,7 +3348,7 @@ bool ChatHandler::HandleWpShowCommand(char* args)
     else
     {
         auto mgenType = wpOwner->GetMotionMaster()->GetCurrentMovementGeneratorType();
-        if (mgenType == WAYPOINT_MOTION_TYPE || mgenType == LINEAR_WP_MOTION_TYPE)
+        if (mgenType == WAYPOINT_MOTION_TYPE || mgenType == LINEAR_WP_MOTION_TYPE || mgenType == PATH_MOTION_TYPE)
         {
             uint32 pathEntry = wpOwner->GetEntry();
             if (targetCreature->GetCreatureGroup() && targetCreature->GetCreatureGroup()->GetFormationEntry())
@@ -3348,12 +3356,12 @@ bool ChatHandler::HandleWpShowCommand(char* args)
             if (WaypointMovementGenerator<Creature> const* wpMMGen = dynamic_cast<WaypointMovementGenerator<Creature> const*>(wpOwner->GetMotionMaster()->GetCurrent()))
             {
                 wpMMGen->GetPathInformation(wpPathId, wpOrigin);
-                wpPath = sWaypointMgr.GetPathFromOrigin(pathEntry, wpOwner->GetGUIDLow(), wpPathId, wpOrigin);
+                wpPath = sWaypointMgr.GetPathFromOrigin(pathEntry, wpOwner->GetDbGuid(), wpPathId, wpOrigin);
             }
         }
 
         if (wpOrigin == PATH_NO_PATH)
-            wpPath = sWaypointMgr.GetDefaultPath(wpOwner->GetEntry(), wpOwner->GetGUIDLow(), &wpOrigin);
+            wpPath = sWaypointMgr.GetDefaultPath(wpOwner->GetEntry(), wpOwner->GetDbGuid(), &wpOrigin);
     }
 
     if (!wpPath || wpPath->empty())
